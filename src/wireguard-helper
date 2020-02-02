@@ -1,0 +1,101 @@
+#!/bin/bash
+pushd /etc/wireguard 
+HISTFILE=/dev/null
+
+function add-client() {
+    # add-client CLIENT PUBLICIP VPNIP [DNSIP]
+    save-conf
+    mkdir -p {keys,conf}
+
+    CLIENT_PRIVATE="keys/$1-privatekey"
+    CLIENT_PUBLIC="keys/$1-publickey"
+    if [ ! -e "$CLIENT_PRIVATE" ]; then
+        config-start $1 
+        wg genkey | tee $CLIENT_PRIVATE | wg pubkey > $CLIENT_PUBLIC
+        
+        wg set wg0 peer $(cat $CLIENT_PUBLIC) endpoint $2:51820 allowed-ips $3/32
+        wg showconf wg0 > wg0.conf
+        write-client-conf $1 $2 $3 $4
+        config-end $1
+
+    else
+        echo "$1 already has a configured peer"
+        exit 1
+    fi
+}
+
+function show-client-qr() {
+    qrencode -t ansiutf8 < conf/wg-$1.conf
+}
+
+function write-client-conf() {
+    if [ "$4" == "" ]; then
+        DNS='10.18.0.1'
+    else
+        DNS=$4
+    fi
+    echo -en "
+    [Interface] 
+    Address = $3/32 
+    PrivateKey = $(cat keys/$1-privatekey) 
+    DNS = $DNS 
+    
+    [Peer] 
+    PublicKey = $(cat keys/server-publickey) 
+    Endpoint = $2:51820 
+    AllowedIps = 0.0.0.0/0 
+    PersistentKeepalive = 21 
+    " > conf/wg-$1.conf
+}
+
+function check-git() {
+    if [ ! -e .git ]; then
+        git init
+        git add --all
+        git config user.name "Wireguard Tracker"
+        git config user.email "wireguard@noremote.com"
+        git commit -m 'wireguard initial commit'
+    fi
+}
+
+function save-conf() {
+    check-git
+    git add --all
+    git commit -m "WireGuard Commit $1"
+}
+
+function config-start() {
+    save-conf "Add client $1 start"
+    git checkout -b conf/$1
+}
+
+function config-end() {
+    save-conf "Add client $1 end"
+    git checkout master
+    git merge conf/$1 -m "Auto-configuration" --no-ff
+    git branch -d conf/$1
+}
+
+
+case "$1" in 
+   (add-client)
+        add-client $2 $3 $4
+        exit 0
+        ;;
+    (client-qr)
+        show-client-qr $2
+        exit 0
+        ;;
+  
+    (*)
+        echo "Try harder"
+        echo "Usage:"
+        echo "    wireguard-helper COMMAND"
+        echo ""
+        echo "    add-client          add a new peer client with public and private keys"
+        echo "    client-qr           show qr code for configuration"
+        exit 1
+        ;;
+esac
+
+popd
